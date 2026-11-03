@@ -1,0 +1,230 @@
+name: Universal SDK Generator
+
+on:
+  workflow_call:
+    inputs:
+      spec-url:
+        description: 'URL of upstream OpenAPI/Swagger specification'
+        required: true
+        type: string
+      generator-name:
+        description: 'Target OpenAPI generator (e.g. php, typescript-fetch, python, go)'
+        required: true
+        type: string
+        default: 'php'
+      generator-version:
+        description: 'OpenAPI Generator CLI Docker tag (e.g. latest, v7.13.0)'
+        required: false
+        type: string
+        default: 'latest'
+      config-file:
+        description: 'Path to generator options config JSON'
+        required: false
+        type: string
+        default: '.generator/openapi-config.json'
+      enrichments-file:
+        description: 'Path to declarative enrichments JSON'
+        required: false
+        type: string
+        default: '.generator/enrichments.json'
+      spec-file:
+        description: 'Path where the downloaded & enriched spec will be stored'
+        required: false
+        type: string
+        default: '.generator/swagger.json'
+      skip-validate-spec:
+        description: 'Pass --skip-validate-spec to generator'
+        required: false
+        type: boolean
+        default: false
+      framework-ref:
+        description: 'Branch or tag of united-workspace/openapi-sdk-builder to use'
+        required: false
+        type: string
+        default: 'main'
+      pr-title:
+        description: 'Custom PR title prefix (e.g. Update AirKey API Client)'
+        required: false
+        type: string
+        default: ''
+      pr-reviewers:
+        description: 'Comma-separated GitHub usernames for PR review requests'
+        required: false
+        type: string
+        default: ''
+      pr-assignees:
+        description: 'Comma-separated GitHub usernames for PR assignees'
+        required: false
+        type: string
+        default: ''
+      protected-files:
+        description: 'Space-separated list of files to restore from HEAD after generation'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  generate:
+    name: Generate ${{ inputs.generator-name }} SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout client repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout SDK Builder Framework
+        uses: actions/checkout@v4
+        with:
+          repository: united-workspace/openapi-sdk-builder
+          ref: ${{ inputs.framework-ref }}
+          path: .sdk-builder-framework
+
+      - name: Fetch & Enrich API Specification
+        run: |
+          mkdir -p "$(dirname "${{ inputs.spec-file }}")"
+          echo "Fetching spec from ${{ inputs.spec-url }}..."
+          curl -s "${{ inputs.spec-url }}" -o "${{ inputs.spec-file }}"
+
+          echo "Applying universal cleanups & enrichments..."
+          ENRICH_ARGS=(--spec="${{ inputs.spec-file }}" --output="${{ inputs.spec-file }}")
+          if [ -f "${{ inputs.enrichments-file }}" ]; then
+            ENRICH_ARGS+=(--enrichments="${{ inputs.enrichments-file }}")
+          fi
+
+          node .sdk-builder-framework/scripts/enrich-spec.js "${ENRICH_ARGS[@]}"
+          rm -rf .sdk-builder-framework
+
+      - name: Generate SDK with OpenAPI Generator
+        run: |
+          GEN_DIR=".generator/generated-client"
+          rm -rf "$GEN_DIR"
+          mkdir -p "$GEN_DIR"
+
+          EXTRA_ARGS=()
+          if [ "${{ inputs.skip-validate-spec }}" = "true" ]; then
+            EXTRA_ARGS+=(--skip-validate-spec)
+          fi
+
+          CONFIG_ARG=()
+          if [ -f "${{ inputs.config-file }}" ]; then
+            CONFIG_ARG=(-c "/local/${{ inputs.config-file }}")
+          fi
+
+          echo "Running openapitools/openapi-generator-cli:${{ inputs.generator-version }} for '${{ inputs.generator-name }}'..."
+          docker run --rm \
+            -u $(id -u):$(id -g) \
+            -v ${{ github.workspace }}:/local \
+            openapitools/openapi-generator-cli:${{ inputs.generator-version }} generate \
+            -i "/local/${{ inputs.spec-file }}" \
+            -g "${{ inputs.generator-name }}" \
+            "${CONFIG_ARG[@]}" \
+            -o "/local/${GEN_DIR}" \
+            "${EXTRA_ARGS[@]}"
+
+          echo "Extracting generated source files..."
+          case "${{ inputs.generator-name }}" in
+            php)
+              mkdir -p lib docs test
+              cp -R "$GEN_DIR/lib/." lib/ || true
+              cp -R "$GEN_DIR/docs/." docs/ || true
+              cp -R "$GEN_DIR/test/." test/ || true
+              cp "$GEN_DIR/README.md" API_README.md || true
+              ;;
+            typescript*|javascript*)
+              mkdir -p src docs
+              cp -R "$GEN_DIR/src/." src/ || cp -R "$GEN_DIR/"*.ts src/ 2>/dev/null || true
+              cp -R "$GEN_DIR/docs/." docs/ || true
+              cp "$GEN_DIR/README.md" API_README.md || true
+              ;;
+            python)
+              mkdir -p docs test
+              # Copy python package folder and docs
+              cp -R "$GEN_DIR/docs/." docs/ || true
+              cp -R "$GEN_DIR/test/." test/ || true
+              cp "$GEN_DIR/README.md" API_README.md || true
+              find "$GEN_DIR" -maxdepth 1 -mindepth 1 -type d ! -name "docs" ! -name "test" -exec cp -R {} . \;
+              ;;
+            *)
+              mkdir -p docs
+              cp -R "$GEN_DIR/." . || true
+              ;;
+          esac
+
+          rm -rf "$GEN_DIR"
+
+      - name: Restore Protected Files
+        if: ${{ inputs.protected-files != '' }}
+        run: |
+          for file in ${{ inputs.protected-files }}; do
+            echo "Restoring protected file: $file"
+            git checkout HEAD -- "$file" || true
+          done
+
+      - name: Validate Composer (PHP only)
+        if: ${{ inputs.generator-name == 'php' && hashFiles('composer.json') != '' }}
+        run: |
+          if command -v composer &> /dev/null; then
+            composer validate --strict
+          else
+            docker run --rm -v ${{ github.workspace }}:/app -w /app composer:2 validate --strict
+          fi
+
+      - name: Check for Changes & Create Pull Request
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "✅ No changes detected after generation. SDK is completely up-to-date."
+            exit 0
+          fi
+
+          echo "Changes detected in generated code or specification."
+          SPEC_VERSION=$(jq -r '.info.version // empty' "${{ inputs.spec-file }}" | tr -d '[:space:]')
+          if [ -z "$SPEC_VERSION" ]; then
+            SPEC_VERSION=$(date +'%Y.%m.%d')
+          fi
+
+          BRANCH_NAME="update-client-${SPEC_VERSION}"
+          PR_TITLE="${{ inputs.pr-title }}"
+          if [ -z "$PR_TITLE" ]; then
+            PR_TITLE="feat: Update API Client to ${SPEC_VERSION}"
+          else
+            PR_TITLE="${PR_TITLE} to ${SPEC_VERSION}"
+          fi
+
+          EXISTING_PR=$(gh pr list --state open --head "$BRANCH_NAME" --json number -q '.[0].number' || true)
+          if [ -n "$EXISTING_PR" ]; then
+            echo "ℹ️ Pull request #${EXISTING_PR} for version ${SPEC_VERSION} already exists. Pushing latest changes to branch."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout -B "$BRANCH_NAME"
+            git add .
+            git commit -m "chore: Refresh generated client for ${SPEC_VERSION}"
+            git push origin "$BRANCH_NAME" --force
+            exit 0
+          fi
+
+          echo "Opening new Pull Request for version ${SPEC_VERSION}..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
+          git add .
+          git commit -m "feat: Auto-update API client to ${SPEC_VERSION}"
+          git push origin "$BRANCH_NAME"
+
+          PR_FLAGS=()
+          if [ -n "${{ inputs.pr-assignees }}" ]; then
+            PR_FLAGS+=(--assignee "${{ inputs.pr-assignees }}")
+          fi
+          if [ -n "${{ inputs.pr-reviewers }}" ]; then
+            PR_FLAGS+=(--reviewer "${{ inputs.pr-reviewers }}")
+          fi
+
+          gh pr create \
+            --title "$PR_TITLE" \
+            --body "Automated SDK update generated by central openapi-sdk-builder. Please review the diff before merging." \
+            --base main \
+            --head "$BRANCH_NAME" \
+            "${PR_FLAGS[@]}"

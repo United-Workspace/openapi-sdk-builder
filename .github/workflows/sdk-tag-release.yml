@@ -1,0 +1,52 @@
+name: Universal Tag Release
+
+on:
+  workflow_call:
+    inputs:
+      spec-file:
+        description: 'Path to the API specification file to read version from'
+        required: false
+        type: string
+        default: '.generator/swagger.json'
+      tag-prefix:
+        description: 'Prefix to prepend to version (e.g. "v" produces v1.0.0)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout client repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Git Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -f "${{ inputs.spec-file }}" ]; then
+            echo "[ERROR] Spec file not found at: ${{ inputs.spec-file }}"
+            exit 1
+          fi
+
+          RAW_VERSION=$(jq -r '.info.version // empty' "${{ inputs.spec-file }}" | tr -d '[:space:]')
+          if [ -z "$RAW_VERSION" ]; then
+            echo "[ERROR] No version found in ${{ inputs.spec-file }}"
+            exit 1
+          fi
+
+          TAG_NAME="${{ inputs.tag-prefix }}${RAW_VERSION}"
+          echo "Target tag: $TAG_NAME"
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists. Skipping."
+          else
+            echo "Creating tag $TAG_NAME"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi
