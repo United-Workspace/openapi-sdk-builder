@@ -77,7 +77,7 @@ jobs:
       - name: Checkout SDK Builder Framework
         uses: actions/checkout@v4
         with:
-          repository: united-workspace/openapi-sdk-builder
+          repository: United-Workspace/openapi-sdk-builder
           ref: ${{ inputs.framework-ref }}
           path: .sdk-builder-framework
 
