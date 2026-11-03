@@ -40,7 +40,7 @@ permissions:
 
 jobs:
   build:
-    uses: united-workspace/openapi-sdk-builder/.github/workflows/sdk-generate.yml@main
+    uses: United-Workspace/openapi-sdk-builder/.github/workflows/sdk-generate.yml@main
     with:
       spec-url: 'https://api.kiwi.ki/v1/spec.json'
       generator-name: 'php'                          # php, typescript-fetch, python, go, etc.
@@ -69,7 +69,7 @@ permissions:
 
 jobs:
   tag:
-    uses: united-workspace/openapi-sdk-builder/.github/workflows/sdk-tag-release.yml@main
+    uses: United-Workspace/openapi-sdk-builder/.github/workflows/sdk-tag-release.yml@main
     with:
       spec-file: '.generator/swagger.json'
       tag-prefix: 'v' # optional: produces tags like v18.0.14
@@ -134,9 +134,8 @@ You can test generation on any local SDK checkout using the builder script:
 
 ---
 
-## ⚙️ GitHub Organization Setup (One-time)
+## ⚙️ Repository Setup
 
-If `united-workspace/openapi-sdk-builder` is private:
-1. Navigate to `https://github.com/organizations/united-workspace/settings/actions` (or the repository **Settings** → **Actions** → **General**).
-2. Under **Access**, select: **"Accessible from repositories in the 'united-workspace' organization"**.
-3. Under **Workflow permissions**, ensure **"Allow GitHub Actions to create and approve pull requests"** is checked on consumer repositories.
+In each SDK consumer repository:
+1. Navigate to **Settings** → **Actions** → **General**.
+2. Under **Workflow permissions**, ensure **"Allow GitHub Actions to create and approve pull requests"** is checked so the automated client update PRs can be created.
