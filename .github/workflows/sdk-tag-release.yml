@@ -33,12 +33,17 @@ jobs:
           fi
 
           RAW_VERSION=$(jq -r '.info.version // empty' "${{ inputs.spec-file }}" | tr -d '[:space:]')
-          if [ -z "$RAW_VERSION" ]; then
-            echo "[ERROR] No version found in ${{ inputs.spec-file }}"
-            exit 1
-          fi
+          NORM_VERSION=$(echo "$RAW_VERSION" | tr '[:upper:]' '[:lower:]' | sed -E 's/^v[._-]//; s/^v//')
+          case "$NORM_VERSION" in
+            latest|dev|draft|snapshot|head|main|master|"")
+              RELEASE_VERSION=$(date +'%Y.%m.%d')
+              ;;
+            *)
+              RELEASE_VERSION="$RAW_VERSION"
+              ;;
+          esac
 
-          TAG_NAME="${{ inputs.tag-prefix }}${RAW_VERSION}"
+          TAG_NAME="${{ inputs.tag-prefix }}${RELEASE_VERSION}"
           echo "Target tag: $TAG_NAME"
 
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then

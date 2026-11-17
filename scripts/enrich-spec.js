@@ -125,7 +125,17 @@ function getSchema(model) {
   return spec.components?.schemas?.[model];
 }
 
-// 3a. Enum Additions (Idempotent Set Union)
+// 3a. Version Override or Normalization
+if (enrichments.info && typeof enrichments.info === 'object') {
+  if (spec.info && typeof spec.info === 'object') {
+    if (enrichments.info.version) {
+      console.log(`[APPLIED] Overriding spec info.version: '${spec.info.version}' -> '${enrichments.info.version}'`);
+      spec.info.version = enrichments.info.version;
+    }
+  }
+}
+
+// 3b. Enum Additions (Idempotent Set Union)
 if (enrichments.enumAdditions && typeof enrichments.enumAdditions === 'object') {
   for (const [modelName, properties] of Object.entries(enrichments.enumAdditions)) {
     const schema = getSchema(modelName);
@@ -158,7 +168,7 @@ if (enrichments.enumAdditions && typeof enrichments.enumAdditions === 'object') 
   }
 }
 
-// 3b. Discriminator Mappings & Child Extensions
+// 3c. Discriminator Mappings & Child Extensions
 if (enrichments.discriminatorMappings && typeof enrichments.discriminatorMappings === 'object') {
   for (const [parentModel, mappingConfig] of Object.entries(enrichments.discriminatorMappings)) {
     const parentSchema = getSchema(parentModel);
